@@ -1,171 +1,150 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
-import {IConfidentialERC20} from "new-confidential-contracts/token/IConfidentialERC20.sol";
+import {FHE, ebool, euint64, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
 import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
-import {FHE, euint64, externalEuint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
+import {IConfidentialFungibleToken} from "new-confidential-contracts/interfaces/IConfidentialFungibleToken.sol";
+import {IConfidentialFungibleTokenReceiver} from "new-confidential-contracts/interfaces/IConfidentialFungibleTokenReceiver.sol";
+import {FHESafeMath} from "new-confidential-contracts/utils/FHESafeMath.sol";
 
-contract ZamaBank is SepoliaConfig {
-    struct Account {
-        euint64 balance; // Encrypted balance
-        euint64 lastInterest; // Encrypted accumulated interest
-        uint256 depositTime; // Last deposit/withdrawal time for interest calculation
-        bool exists; // Whether account exists
+/// @title ZamaBank - Confidential cUSDT bank with daily interest
+/// @notice Users deposit confidential cUSDT and earn 0.1% daily interest (full days only).
+///         Interest is funded by the owner by transferring cUSDT to this contract.
+///         Interest is auto-claimed on deposit and withdraw, and can be claimed anytime.
+contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
+    using FHESafeMath for euint64;
+
+    IConfidentialFungibleToken public immutable token; // cUSDT
+
+    // Encrypted principal deposit per user
+    mapping(address => euint64) private _deposits;
+    // Last time interest was accrued (timestamp), remainder carried over
+    mapping(address => uint256) private _lastAccruedAt;
+
+    // 0.1% per day -> denominator 1000
+    uint64 public constant DAILY_RATE_DENOM = 1000;
+
+    event Deposited(address indexed user, euint64 amount, uint256 timestamp);
+    event Withdrawn(address indexed user, euint64 amount, uint256 timestamp);
+    event InterestClaimed(address indexed user, euint64 amount, uint256 daysAccrued);
+
+    constructor(address token_) {
+        require(token_ != address(0), "Invalid token");
+        token = IConfidentialFungibleToken(token_);
     }
 
-    mapping(address => Account) private accounts;
-
-    IConfidentialERC20 public immutable cUSDT;
-
-    // Interest rate: 0.1% daily = 1000 / 1000000 = 0.001
-    uint256 public constant DAILY_INTEREST_RATE = 1000; // 0.1% = 1000/1000000
-    uint256 public constant RATE_DENOMINATOR = 1000000;
-    uint256 public constant SECONDS_PER_DAY = 86400;
-
-    event Deposit(address indexed user, uint256 timestamp);
-    event Withdrawal(address indexed user, uint256 timestamp);
-    event InterestCalculated(address indexed user, uint256 timestamp);
-
-    constructor(address _cUSDT) {
-        cUSDT = IConfidentialERC20(_cUSDT);
+    // View: encrypted principal balance
+    function getDeposit(address user) external view returns (euint64) {
+        return _deposits[user];
     }
 
-    function deposit(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        require(accounts[msg.sender].exists == false || accounts[msg.sender].depositTime > 0, "Invalid account state");
-
-        // Convert external encrypted input to internal encrypted type
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
-
-        // Calculate interest before deposit if account exists
-        if (accounts[msg.sender].exists) {
-            _updateInterest(msg.sender);
-        } else {
-            // Initialize new account
-            accounts[msg.sender] = Account({
-                balance: FHE.asEuint64(0),
-                lastInterest: FHE.asEuint64(0),
-                depositTime: block.timestamp,
-                exists: true
-            });
-        }
-
-        // Add to balance
-        accounts[msg.sender].balance = FHE.add(accounts[msg.sender].balance, amount);
-        accounts[msg.sender].depositTime = block.timestamp;
-
-        // Set ACL permissions
-        FHE.allowThis(accounts[msg.sender].balance);
-        FHE.allow(accounts[msg.sender].balance, msg.sender);
-        FHE.allowThis(accounts[msg.sender].lastInterest);
-        FHE.allow(accounts[msg.sender].lastInterest, msg.sender);
-
-        // Transfer cUSDT from user to contract (confidential transfer)
-        // Note: User needs to approve this contract first with encrypted amount
-        FHE.allowTransient(amount, address(cUSDT));
-        cUSDT.transferFrom(msg.sender, address(this), amount);
-
-        emit Deposit(msg.sender, block.timestamp);
+    // View: last accrued timestamp (used by frontend to compute interest off-chain)
+    function getLastAccruedAt(address user) external view returns (uint256) {
+        return _lastAccruedAt[user];
     }
 
-    function withdraw(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        require(accounts[msg.sender].exists, "Account does not exist");
-
-        euint64 withdrawAmount = FHE.fromExternal(encryptedAmount, inputProof);
-
-        // Update interest before withdrawal
-        _updateInterest(msg.sender);
-
-        // Calculate total available (balance + interest)
-        euint64 totalAvailable = FHE.add(accounts[msg.sender].balance, accounts[msg.sender].lastInterest);
-
-        // Check if withdrawal amount is valid
-        ebool canWithdraw = FHE.le(withdrawAmount, totalAvailable);
-
-        // Conditional withdrawal using FHE.select
-        euint64 actualWithdrawAmount = FHE.select(canWithdraw, withdrawAmount, FHE.asEuint64(0));
-
-        // Subtract from available funds (balance first, then interest)
-        euint64 remainingWithdraw = actualWithdrawAmount;
-
-        // Subtract from balance first
-        ebool balanceEnough = FHE.le(actualWithdrawAmount, accounts[msg.sender].balance);
-        euint64 balanceDeduction = FHE.select(balanceEnough, actualWithdrawAmount, accounts[msg.sender].balance);
-        accounts[msg.sender].balance = FHE.sub(accounts[msg.sender].balance, balanceDeduction);
-
-        // If balance wasn't enough, subtract remainder from interest
-        remainingWithdraw = FHE.sub(actualWithdrawAmount, balanceDeduction);
-        accounts[msg.sender].lastInterest = FHE.sub(accounts[msg.sender].lastInterest, remainingWithdraw);
-
-        // Update timestamp
-        accounts[msg.sender].depositTime = block.timestamp;
-
-        // Set ACL permissions
-        FHE.allowThis(accounts[msg.sender].balance);
-        FHE.allow(accounts[msg.sender].balance, msg.sender);
-        FHE.allowThis(accounts[msg.sender].lastInterest);
-        FHE.allow(accounts[msg.sender].lastInterest, msg.sender);
-
-        // Transfer cUSDT to user (confidential transfer)
-        FHE.allowTransient(actualWithdrawAmount, address(cUSDT));
-        cUSDT.transfer(msg.sender, actualWithdrawAmount);
-
-        emit Withdrawal(msg.sender, block.timestamp);
-    }
-
-    function updateInterest() external {
-        require(accounts[msg.sender].exists, "Account does not exist");
-        _updateInterest(msg.sender);
-    }
-
-    function _updateInterest(address user) internal {
-        if (!accounts[user].exists || accounts[user].depositTime == 0) {
+    // User can claim accrued interest (full days only)
+    function claimInterest() external {
+        (euint64 interest, uint256 daysAccrued) = _computeInterest(msg.sender);
+        if (daysAccrued == 0) {
+            // nothing to do
             return;
         }
 
-        uint256 timeElapsed = block.timestamp - accounts[user].depositTime;
-        uint256 fullDays = timeElapsed / SECONDS_PER_DAY;
+        // Advance accrual time by full days accrued
+        _lastAccruedAt[msg.sender] += daysAccrued * 1 days;
 
-        if (fullDays > 0) {
-            // Calculate interest for full days only
-            // Interest = balance * (DAILY_INTEREST_RATE / RATE_DENOMINATOR) * fullDays
-            euint64 dailyInterest = FHE.mul(accounts[user].balance, DAILY_INTEREST_RATE);
-            dailyInterest = FHE.div(dailyInterest, RATE_DENOMINATOR);
-            euint64 totalNewInterest = FHE.mul(dailyInterest, uint64(fullDays));
+        // Allow this contract to use the ciphertext and pay interest
+        FHE.allowThis(interest);
+        token.confidentialTransfer(msg.sender, interest);
 
-            // Add to existing interest
-            accounts[user].lastInterest = FHE.add(accounts[user].lastInterest, totalNewInterest);
+        emit InterestClaimed(msg.sender, interest, daysAccrued);
+    }
 
-            // Update deposit time to the start of the next incomplete day
-            accounts[user].depositTime = accounts[user].depositTime + (fullDays * SECONDS_PER_DAY);
+    // Withdraw principal. Auto-claims interest first.
+    function withdraw(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
+        // Auto-claim interest
+        _autoClaimInterest(msg.sender);
 
-            emit InterestCalculated(user, block.timestamp);
+        // Requested amount
+        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+
+        // Safely decrease user's encrypted deposit (no branch leakage)
+        ( , euint64 updated) = FHESafeMath.tryDecrease(_deposits[msg.sender], amount);
+        // Determine actually allowed withdrawal: if decrease failed, withdraw 0
+        ebool canWithdraw = FHE.ge(_deposits[msg.sender], amount);
+        euint64 toWithdraw = FHE.select(canWithdraw, amount, FHE.asEuint64(0));
+
+        // Persist updated encrypted deposit
+        FHE.allowThis(updated);
+        FHE.allow(updated, msg.sender);
+        _deposits[msg.sender] = updated;
+
+        // Transfer confidential tokens from bank to user
+        FHE.allowThis(toWithdraw);
+        token.confidentialTransfer(msg.sender, toWithdraw);
+
+        emit Withdrawn(msg.sender, toWithdraw, block.timestamp);
+    }
+
+    // Token callback on transferAndCall deposit
+    function onConfidentialTransferReceived(
+        address /* operator */, 
+        address from, 
+        euint64 amount, 
+        bytes calldata /* data */
+    ) external override returns (ebool) {
+        require(msg.sender == address(token), "Invalid sender");
+
+        // Auto-claim interest before updating principal
+        _autoClaimInterest(from);
+
+        // Increase encrypted principal
+        ( , euint64 updated) = FHESafeMath.tryIncrease(_deposits[from], amount);
+        FHE.allowThis(updated);
+        FHE.allow(updated, from);
+        _deposits[from] = updated;
+
+        emit Deposited(from, amount, block.timestamp);
+        return FHE.asEbool(true);
+    }
+
+    // Internal: compute interest for user based on full days and current principal
+    function _computeInterest(address user) internal returns (euint64 interest, uint256 daysAccrued) {
+        uint256 last = _lastAccruedAt[user];
+        if (last == 0) {
+            // Initialize accrual start at first interaction
+            return (FHE.asEuint64(0), 0);
         }
+        uint256 elapsed = block.timestamp - last;
+        daysAccrued = elapsed / 1 days; // floor
+        if (daysAccrued == 0) {
+            return (FHE.asEuint64(0), 0);
+        }
+
+        // interest = principal * days / 1000
+        euint64 principal = _deposits[user];
+        euint64 d = FHE.asEuint64(uint64(daysAccrued));
+        euint64 prod = FHE.mul(principal, d);
+        interest = FHE.div(prod, DAILY_RATE_DENOM);
     }
 
-    // View functions for encrypted balances
-    function getBalance() external view returns (euint64) {
-        require(accounts[msg.sender].exists, "Account does not exist");
-        return accounts[msg.sender].balance;
-    }
+    function _autoClaimInterest(address user) internal {
+        // Initialize lastAccruedAt at first interaction
+        if (_lastAccruedAt[user] == 0) {
+            _lastAccruedAt[user] = block.timestamp;
+            return;
+        }
 
-    function getInterest() external view returns (euint64) {
-        require(accounts[msg.sender].exists, "Account does not exist");
-        return accounts[msg.sender].lastInterest;
-    }
+        (euint64 interest, uint256 daysAccrued) = _computeInterest(user);
+        if (daysAccrued == 0) return;
 
-    function getDepositTime() external view returns (uint256) {
-        require(accounts[msg.sender].exists, "Account does not exist");
-        return accounts[msg.sender].depositTime;
-    }
+        // Move forward by full days accrued
+        _lastAccruedAt[user] += daysAccrued * 1 days;
 
-    function accountExists(address user) external view returns (bool) {
-        return accounts[user].exists;
-    }
-
-    // Helper function to get total balance (balance + interest)
-    function getTotalBalance() external view returns (euint64) {
-        require(accounts[msg.sender].exists, "Account does not exist");
-        return FHE.add(accounts[msg.sender].balance, accounts[msg.sender].lastInterest);
+        // Pay interest
+        FHE.allowThis(interest);
+        token.confidentialTransfer(user, interest);
+        emit InterestClaimed(user, interest, daysAccrued);
     }
 }

@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useReadContract } from 'wagmi';
-import { BrowserProvider, Contract } from 'ethers';
+import { Contract } from 'ethers';
 
-import { Header } from './Header';
 import { useZamaInstance } from '../hooks/useZamaInstance';
 import { useEthersSigner } from '../hooks/useEthersSigner';
 import { BANK_ADDRESS, BANK_ABI, CUSDT_ADDRESS, CUSDT_ABI } from '../config/contracts';
@@ -117,11 +116,7 @@ export function BankApp() {
     }
   };
 
-  const daysAccrued = useMemo(() => {
-    if (!lastAccrued) return 0;
-    const last = Number(lastAccrued as bigint);
-    return Math.floor((now - last) / (24 * 60 * 60));
-  }, [lastAccrued, now]);
+  // per-day view not used anymore; accrual preview uses seconds
 
   const interestPreview = useMemo(() => {
     if (!depositClear || !lastAccrued) return 0;

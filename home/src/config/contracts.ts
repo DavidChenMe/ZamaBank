@@ -6,6 +6,5 @@ export const BANK_ADDRESS = '0x03E2C5179a834C9653630ace508106FF67fB17EF' as `0x$
 import cUSDTDeployment from '../../../deployments/sepolia/cUSDT.json';
 import bankDeployment from '../../../deployments/sepolia/ZamaBank.json';
 
-export const CUSDT_ABI = cUSDTDeployment.abi as const;
-export const BANK_ABI = bankDeployment.abi as const;
-
+export const CUSDT_ABI = cUSDTDeployment.abi;
+export const BANK_ABI = bankDeployment.abi;

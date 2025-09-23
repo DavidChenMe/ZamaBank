@@ -16,4 +16,11 @@ contract cUSDT is ConfidentialFungibleToken, SepoliaConfig {
         euint64 minted = _mint(msg.sender, amount);
         return minted;
     }
+
+    function mint(uint64 amount) external returns (euint64) {
+        euint64 eamount = FHE.asEuint64(amount);
+        // Mint to caller
+        euint64 minted = _mint(msg.sender, eamount);
+        return minted;
+    }
 }

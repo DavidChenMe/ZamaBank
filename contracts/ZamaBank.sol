@@ -4,14 +4,13 @@ pragma solidity ^0.8.24;
 import {FHE, ebool, euint64, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
 import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {IConfidentialFungibleToken} from "new-confidential-contracts/interfaces/IConfidentialFungibleToken.sol";
-import {IConfidentialFungibleTokenReceiver} from "new-confidential-contracts/interfaces/IConfidentialFungibleTokenReceiver.sol";
 import {FHESafeMath} from "new-confidential-contracts/utils/FHESafeMath.sol";
 
 /// @title ZamaBank - Confidential cUSDT bank with daily interest
 /// @notice Users deposit confidential cUSDT and earn 0.1% daily interest (full days only).
 ///         Interest is funded by the owner by transferring cUSDT to this contract.
 ///         Interest is auto-claimed on deposit and withdraw, and can be claimed anytime.
-contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
+contract ZamaBank is SepoliaConfig {
     using FHESafeMath for euint64;
 
     IConfidentialFungibleToken public immutable token; // cUSDT
@@ -21,8 +20,8 @@ contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
     // Last time interest was accrued (timestamp), remainder carried over
     mapping(address => uint256) private _lastAccruedAt;
 
-    // 0.1% per day -> denominator 1000
-    uint64 public constant DAILY_RATE_DENOM = 1000;
+    // 0.1% per day => per-second rate = 1 / (1000 * 86400)
+    uint64 public constant RATE_DENOM = 1000 * 86400;
 
     event Deposited(address indexed user, euint64 amount, uint256 timestamp);
     event Withdrawn(address indexed user, euint64 amount, uint256 timestamp);
@@ -43,22 +42,23 @@ contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
         return _lastAccruedAt[user];
     }
 
-    // User can claim accrued interest (full days only)
+    // User can claim accrued interest (continuous accrual)
     function claimInterest() external {
-        (euint64 interest, uint256 daysAccrued) = _computeInterest(msg.sender);
-        if (daysAccrued == 0) {
+        (euint64 interest, uint256 elapsed) = _computeInterest(msg.sender);
+        if (elapsed == 0) {
             // nothing to do
             return;
         }
 
-        // Advance accrual time by full days accrued
-        _lastAccruedAt[msg.sender] += daysAccrued * 1 days;
+        // Advance accrual time to now
+        _lastAccruedAt[msg.sender] = block.timestamp;
 
         // Allow this contract to use the ciphertext and pay interest
         FHE.allowThis(interest);
+        FHE.allowTransient(interest, address(token));
         token.confidentialTransfer(msg.sender, interest);
 
-        emit InterestClaimed(msg.sender, interest, daysAccrued);
+        emit InterestClaimed(msg.sender, interest, elapsed);
     }
 
     // Withdraw principal. Auto-claims interest first.
@@ -82,51 +82,49 @@ contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
 
         // Transfer confidential tokens from bank to user
         FHE.allowThis(toWithdraw);
+        FHE.allowTransient(toWithdraw, address(token));
         token.confidentialTransfer(msg.sender, toWithdraw);
 
         emit Withdrawn(msg.sender, toWithdraw, block.timestamp);
     }
 
-    // Token callback on transferAndCall deposit
-    function onConfidentialTransferReceived(
-        address /* operator */, 
-        address from, 
-        euint64 amount, 
-        bytes calldata /* data */
-    ) external override returns (ebool) {
-        require(msg.sender == address(token), "Invalid sender");
-
+    // Deposit confidential amount from caller. Requires caller to setOperator(bank, until) on token.
+    function deposit(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
         // Auto-claim interest before updating principal
-        _autoClaimInterest(from);
+        _autoClaimInterest(msg.sender);
+
+        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+
+        // Allow token to consume the ciphertext and pull funds from user to bank
+        FHE.allowTransient(amount, address(token));
+        token.confidentialTransferFrom(msg.sender, address(this), amount);
 
         // Increase encrypted principal
-        ( , euint64 updated) = FHESafeMath.tryIncrease(_deposits[from], amount);
+        ( , euint64 updated) = FHESafeMath.tryIncrease(_deposits[msg.sender], amount);
         FHE.allowThis(updated);
-        FHE.allow(updated, from);
-        _deposits[from] = updated;
+        FHE.allow(updated, msg.sender);
+        _deposits[msg.sender] = updated;
 
-        emit Deposited(from, amount, block.timestamp);
-        return FHE.asEbool(true);
+        emit Deposited(msg.sender, amount, block.timestamp);
     }
 
     // Internal: compute interest for user based on full days and current principal
-    function _computeInterest(address user) internal returns (euint64 interest, uint256 daysAccrued) {
+    function _computeInterest(address user) internal returns (euint64 interest, uint256 elapsed) {
         uint256 last = _lastAccruedAt[user];
         if (last == 0) {
             // Initialize accrual start at first interaction
             return (FHE.asEuint64(0), 0);
         }
-        uint256 elapsed = block.timestamp - last;
-        daysAccrued = elapsed / 1 days; // floor
-        if (daysAccrued == 0) {
+        elapsed = block.timestamp - last;
+        if (elapsed == 0) {
             return (FHE.asEuint64(0), 0);
         }
 
-        // interest = principal * days / 1000
+        // interest = principal * elapsedSeconds / RATE_DENOM
         euint64 principal = _deposits[user];
-        euint64 d = FHE.asEuint64(uint64(daysAccrued));
-        euint64 prod = FHE.mul(principal, d);
-        interest = FHE.div(prod, DAILY_RATE_DENOM);
+        euint64 s = FHE.asEuint64(uint64(elapsed));
+        euint64 prod = FHE.mul(principal, s);
+        interest = FHE.div(prod, RATE_DENOM);
     }
 
     function _autoClaimInterest(address user) internal {
@@ -136,15 +134,16 @@ contract ZamaBank is SepoliaConfig, IConfidentialFungibleTokenReceiver {
             return;
         }
 
-        (euint64 interest, uint256 daysAccrued) = _computeInterest(user);
-        if (daysAccrued == 0) return;
+        (euint64 interest, uint256 elapsed) = _computeInterest(user);
+        if (elapsed == 0) return;
 
-        // Move forward by full days accrued
-        _lastAccruedAt[user] += daysAccrued * 1 days;
+        // Move forward to now
+        _lastAccruedAt[user] = block.timestamp;
 
         // Pay interest
         FHE.allowThis(interest);
+        FHE.allowTransient(interest, address(token));
         token.confidentialTransfer(user, interest);
-        emit InterestClaimed(user, interest, daysAccrued);
+        emit InterestClaimed(user, interest, elapsed);
     }
 }

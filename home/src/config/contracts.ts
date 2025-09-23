@@ -2,9 +2,9 @@
 export const CUSDT_ADDRESS = '0x8D112c4284F8F95a80d23b86F5a014828537d004' as `0x${string}`;
 export const BANK_ADDRESS = '0x03E2C5179a834C9653630ace508106FF67fB17EF' as `0x${string}`;
 
-// Use generated ABIs directly from deployments
-import cUSDTDeployment from '../../../deployments/sepolia/cUSDT.json';
-import bankDeployment from '../../../deployments/sepolia/ZamaBank.json';
+// ABIs copied locally (no external imports)
+import CUSDT_ABI_DATA from './abi/cUSDT';
+import BANK_ABI_DATA from './abi/ZamaBank';
 
-export const CUSDT_ABI = cUSDTDeployment.abi;
-export const BANK_ABI = bankDeployment.abi;
+export const CUSDT_ABI = CUSDT_ABI_DATA;
+export const BANK_ABI = BANK_ABI_DATA;

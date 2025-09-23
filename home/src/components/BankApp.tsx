@@ -207,7 +207,7 @@ export function BankApp() {
 
   return (
     <div className="bank-app">
-      <Header />
+
       <main className="main-content">
         <div className="card">
           <div className="card-header">

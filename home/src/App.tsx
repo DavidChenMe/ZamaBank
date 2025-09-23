@@ -1,18 +1,10 @@
 import { WagmiProvider } from 'wagmi';
-import { RainbowKitProvider, getDefaultConfig } from '@rainbow-me/rainbowkit';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { sepolia } from 'wagmi/chains';
-
+import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 
-import ZamaBankApp from './components/ZamaBankApp';
-
-const config = getDefaultConfig({
-  appName: 'ZamaBank',
-  projectId: 'YOUR_PROJECT_ID', // Get this from WalletConnect
-  chains: [sepolia],
-  ssr: false,
-});
+import { config } from './config/wagmi';
+import { BankApp } from './components/BankApp';
 
 const queryClient = new QueryClient();
 
@@ -20,9 +12,9 @@ function App() {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
-          <div className="App">
-            <ZamaBankApp />
+        <RainbowKitProvider locale="en">
+          <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
+            <BankApp />
           </div>
         </RainbowKitProvider>
       </QueryClientProvider>
@@ -30,4 +22,4 @@ function App() {
   );
 }
 
-export default App;
+export default App

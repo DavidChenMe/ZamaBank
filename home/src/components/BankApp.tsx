@@ -131,7 +131,7 @@ export function BankApp() {
     if (!address) return alert('Connect wallet');
     if (!instance) return alert('Encryption is initializing. Please retry shortly.');
     if (!isOperator) {
-      alert('请先点击“Approve cUSDT”授权银行合约，然后再进行存款');
+      alert('Approve cUSDT first');
       return;
     }
     if (!depositInput) return;

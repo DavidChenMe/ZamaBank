@@ -304,55 +304,194 @@ export function BankApp() {
 
   return (
     <div className="bank-app">
+      <header className="app-header">
+        <div className="header-content">
+          <div className="logo-section">
+            <div className="logo">🏦</div>
+            <h1>ZamaBank</h1>
+            <span className="tagline">Privacy-First Banking</span>
+          </div>
+          <ConnectButton />
+        </div>
+      </header>
 
       <main className="main-content">
-        <div className="card">
-          <div className="card-header">
-            <h2>ZamaBank</h2>
-            <ConnectButton />
-          </div>
-          <div className="grid-2">
-            <div>
-              <div className="stat">
-                <div className="label">Your Deposit</div>
-                <div className="value">{depositClear !== null ? `${formatAmount(depositClear)} cUSDT` : '***'}</div>
-                <div className="sub">
-                  <button className="secondary" onClick={decrypt} disabled={!address || !encDeposit || isDecrypting || isZamaLoading}>
-                    {isDecrypting ? 'Decrypting...' : 'Decrypt Balance'}
+        {/* Hero Section */}
+        <div className="hero-section">
+          <p>Earn 0.1% daily interest on your deposits with complete privacy</p>
+        </div>
+
+        {/* Dashboard Cards */}
+        <div className="dashboard-grid">
+          {/* Balance Overview Card */}
+          <div className="dashboard-card balance-card">
+            <div className="card-header">
+              <h3>💰 Account Overview</h3>
+            </div>
+            <div className="balance-stats">
+              <div className="stat-item">
+                <div className="stat-icon">🏛️</div>
+                <div className="stat-content">
+                  <div className="stat-label">Bank Deposit</div>
+                  <div className="stat-value">
+                    {depositClear !== null ? `${formatAmount(depositClear)} cUSDT` : '***'}
+                  </div>
+                  <button
+                    className="decrypt-btn"
+                    onClick={decrypt}
+                    disabled={!address || !encDeposit || isDecrypting || isZamaLoading}
+                  >
+                    {isDecrypting ? '🔓 Decrypting...' : '🔒 Decrypt Balance'}
                   </button>
-                  {zamaError && <span style={{marginLeft: 8, color: '#ef4444'}}>Init error</span>}
                 </div>
               </div>
-              <div className="stat">
-                <div className="label">Your cUSDT Balance</div>
-                <div className="value">{tokenBalanceClear !== null ? `${formatAmount(tokenBalanceClear)} cUSDT` : '***'}</div>
-                <div className="sub">
-                  <button className="secondary" onClick={decryptTokenBalance} disabled={!address || !encTokenBalance || isDecryptingToken || isZamaLoading}>
-                    {isDecryptingToken ? 'Decrypting...' : 'Decrypt cUSDT'}
+
+              <div className="stat-item">
+                <div className="stat-icon">💳</div>
+                <div className="stat-content">
+                  <div className="stat-label">Wallet Balance</div>
+                  <div className="stat-value">
+                    {tokenBalanceClear !== null ? `${formatAmount(tokenBalanceClear)} cUSDT` : '***'}
+                  </div>
+                  <button
+                    className="decrypt-btn"
+                    onClick={decryptTokenBalance}
+                    disabled={!address || !encTokenBalance || isDecryptingToken || isZamaLoading}
+                  >
+                    {isDecryptingToken ? '🔓 Decrypting...' : '🔒 Decrypt Wallet'}
                   </button>
                 </div>
               </div>
-              <div className="stat">
-                <div className="label">Accrued Interest (full days)</div>
-                <div className="value">{depositClear !== null ? `${interestPreview.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} cUSDT` : '***'}</div>
-                <div className="sub">Last accrual: {lastAccrued ? new Date(Number(lastAccrued as bigint)*1000).toLocaleString() : '-'}</div>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button className="primary" onClick={claim} disabled={busy || !address}>Claim Interest</button>
-                <button className="secondary" onClick={approveOperator} disabled={busy || !address || (isOperator as boolean|undefined)}>Approve cUSDT</button>
-                <button className="secondary" onClick={faucet} disabled={busy || !address}>Faucet Mint cUSDT</button>
+
+              <div className="stat-item">
+                <div className="stat-icon">📈</div>
+                <div className="stat-content">
+                  <div className="stat-label">Earned Interest</div>
+                  <div className="stat-value interest-value">
+                    {depositClear !== null ? `${interestPreview.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} cUSDT` : '***'}
+                  </div>
+                  <div className="stat-meta">
+                    Last accrual: {lastAccrued ? new Date(Number(lastAccrued as bigint)*1000).toLocaleDateString() : '-'}
+                  </div>
+                </div>
               </div>
             </div>
-            <div>
-              <div className="form">
-                <label>Deposit Amount</label>
-                <input value={depositInput} onChange={(e) => setDepositInput(e.target.value)} placeholder="100.0" />
-                <button className="primary" onClick={deposit} disabled={busy || !address || !depositInput || isZamaLoading}>Deposit</button>
+
+            {zamaError && (
+              <div className="error-banner">
+                ⚠️ Encryption initialization error
               </div>
-              <div className="form">
-                <label>Withdraw Amount</label>
-                <input value={withdrawInput} onChange={(e) => setWithdrawInput(e.target.value)} placeholder="50.0" />
-                <button className="primary" onClick={withdraw} disabled={busy || !address || !withdrawInput || isZamaLoading}>Withdraw</button>
+            )}
+          </div>
+
+          {/* Actions Card */}
+          <div className="dashboard-card actions-card">
+            <div className="card-header">
+              <h3>💼 Banking Operations</h3>
+            </div>
+
+            <div className="operation-section">
+              <div className="operation-form">
+                <label className="form-label">
+                  <span className="label-icon">💵</span>
+                  Deposit Amount
+                </label>
+                <div className="input-group">
+                  <input
+                    className="amount-input"
+                    value={depositInput}
+                    onChange={(e) => setDepositInput(e.target.value)}
+                    placeholder="Enter amount to deposit"
+                  />
+                  <span className="input-suffix">cUSDT</span>
+                </div>
+                <button
+                  className="action-btn deposit-btn"
+                  onClick={deposit}
+                  disabled={busy || !address || !depositInput || isZamaLoading}
+                >
+                  {busy ? '⏳ Processing...' : '💰 Deposit'}
+                </button>
+              </div>
+
+              <div className="operation-form">
+                <label className="form-label">
+                  <span className="label-icon">💸</span>
+                  Withdraw Amount
+                </label>
+                <div className="input-group">
+                  <input
+                    className="amount-input"
+                    value={withdrawInput}
+                    onChange={(e) => setWithdrawInput(e.target.value)}
+                    placeholder="Enter amount to withdraw"
+                  />
+                  <span className="input-suffix">cUSDT</span>
+                </div>
+                <button
+                  className="action-btn withdraw-btn"
+                  onClick={withdraw}
+                  disabled={busy || !address || !withdrawInput || isZamaLoading}
+                >
+                  {busy ? '⏳ Processing...' : '💸 Withdraw'}
+                </button>
+              </div>
+            </div>
+
+            <div className="quick-actions">
+              <h4>Quick Actions</h4>
+              <div className="action-buttons">
+                <button
+                  className="quick-action-btn claim-btn"
+                  onClick={claim}
+                  disabled={busy || !address}
+                >
+                  🎁 Claim Interest
+                </button>
+                <button
+                  className="quick-action-btn approve-btn"
+                  onClick={approveOperator}
+                  disabled={busy || !address || (isOperator as boolean|undefined)}
+                >
+                  ✅ Approve cUSDT
+                </button>
+                <button
+                  className="quick-action-btn faucet-btn"
+                  onClick={faucet}
+                  disabled={busy || !address}
+                >
+                  🚰 Get Test Tokens
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Info Card */}
+          <div className="dashboard-card info-card">
+            <div className="card-header">
+              <h3>ℹ️ How It Works</h3>
+            </div>
+            <div className="info-content">
+              <div className="info-item">
+                <div className="info-step">1</div>
+                <div className="info-text">
+                  <strong>Deposit cUSDT</strong>
+                  <p>Your tokens are stored in encrypted form on the blockchain</p>
+                </div>
+              </div>
+              <div className="info-item">
+                <div className="info-step">2</div>
+                <div className="info-text">
+                  <strong>Earn Interest</strong>
+                  <p>Automatically accrue 0.1% daily interest on your deposit</p>
+                </div>
+              </div>
+              <div className="info-item">
+                <div className="info-step">3</div>
+                <div className="info-text">
+                  <strong>Withdraw Anytime</strong>
+                  <p>Access your funds and earned interest whenever you want</p>
+                </div>
               </div>
             </div>
           </div>
